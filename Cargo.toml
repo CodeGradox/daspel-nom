@@ -1,0 +1,10 @@
+[package]
+name = "nom-parser"
+version = "0.1.0"
+authors = ["Magnus Åsrud <magnusasrud92@gmail.com>"]
+
+[lib]
+name = "daspel_rs"
+
+[dependencies]
+nom = "2.1.0"
