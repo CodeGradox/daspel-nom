@@ -19,10 +19,11 @@ named!(parens<ast::Expr>, ws!(
 // How it works:
 // First, it tries to find a decimal number.
 // complete! changes an incomplete find to an error.
-// recognize will return the full delimited (as it would only return the ".").
-// ws! must be outside of recognize, or else it would try to parse a string
+// recognize! will return the full delimited match (as opposed to only return the ".").
+// ws! must be outside of recognize! or else it would try to parse a string
 // with spaces, which would return an error.
 // Then it maps the &[u8] to a str, then a f32, then finally an Expr.
+// If it fails to find or parse a real, it will call parsens.
 named!(pub unsigned_real<ast::Expr>, alt_complete!(
     map!(
         map_res!(
@@ -44,6 +45,11 @@ named!(pub unsigned_real<ast::Expr>, alt_complete!(
 ));
 
 // Takes a digit and parses it into an i32
+//
+// How it works:
+// It finds a digit, then turns the &[u8] into a str.
+// Then the str is parsed into an int and is finally returned as an Expr::Lit.
+// If it fails to find or parse a real, it will call parsens.
 named!(unsigned_int<ast::Expr>, alt_complete!(
     map!(
         map_res!(
