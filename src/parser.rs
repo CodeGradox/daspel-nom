@@ -1,4 +1,4 @@
-use nom::{IResult, digit};
+use nom::{IResult, ErrorKind, digit};
 
 use std::str;
 use std::str::FromStr;
@@ -24,24 +24,21 @@ named!(parens<ast::Expr>, ws!(
 // with spaces, which would return an error.
 // Then it maps the &[u8] to a str, then a f32, then finally an Expr.
 // If it fails to find or parse a real, it will call parsens.
-named!(pub unsigned_real<ast::Expr>, alt_complete!(
-    map!(
+named!(pub unsigned_real<ast::Expr>, map!(
+    map_res!(
         map_res!(
-            map_res!(
-                ws!(
-                    recognize!(
-                        complete!(
-                            delimited!(digit, tag!("."), digit)
-                        )
+            ws!(
+                recognize!(
+                    complete!(
+                        delimited!(digit, tag!("."), digit)
                     )
-                ),
-                str::from_utf8
+                )
             ),
-            FromStr::from_str
+            str::from_utf8
         ),
-        |r: f32| ast::Expr::Lit(ast::Lit::Real(r))
-    )
-    | parens
+        FromStr::from_str
+    ),
+    |r: f32| ast::Expr::Lit(ast::Lit::Real(r))
 ));
 
 // Takes a digit and parses it into an i32
@@ -50,25 +47,86 @@ named!(pub unsigned_real<ast::Expr>, alt_complete!(
 // It finds a digit, then turns the &[u8] into a str.
 // Then the str is parsed into an int and is finally returned as an Expr::Lit.
 // If it fails to find or parse a real, it will call parsens.
-named!(unsigned_int<ast::Expr>, alt_complete!(
-    map!(
+named!(unsigned_int<ast::Expr>, map!(
+    map_res!(
         map_res!(
-            map_res!(
-                ws!(digit),
-                str::from_utf8
-            ),
-            FromStr::from_str
+            ws!(digit),
+            str::from_utf8
         ),
-        |n: i32| ast::Expr::Lit(ast::Lit::Int(n))
-    )
-    | parens
+        FromStr::from_str
+    ),
+    |n: i32| ast::Expr::Lit(ast::Lit::Int(n))
 ));
+
+fn parse_string(input: &[u8]) -> IResult<&[u8], ast::Expr> {
+    let mut s = String::new();
+    let chars = match str::from_utf8(input) {
+        Ok(ok) => ok,
+        Err(_) => return IResult::Error(ErrorKind::IsNotStr),
+    };
+    let mut chars = chars.char_indices();
+    while let Some((byte_offset, ch)) = chars.next() {
+        match ch {
+            '"' => {
+                let expr = ast::Expr::Lit(ast::Lit::Str(s));
+                return IResult::Done(&input[byte_offset..], expr);
+            }
+            '\\' => {
+                match chars.next() {
+                    Some((_, 'n')) => s.push('\n'),
+                    Some((_, 'r')) => s.push('\r'),
+                    Some((_, 't')) => s.push('\t'),
+                    Some((_, '"')) => s.push('"'),
+                    Some((_, '\'')) => s.push('\''),
+                    Some((_, '\\')) => s.push('\\'),
+                    Some((_, '\n')) | Some((_, '\r')) =>
+                        return IResult::Error(ErrorKind::IsNotStr),
+                    _ => break,
+                }
+            }
+            '\r' | '\n' => return IResult::Error(ErrorKind::IsNotStr),
+            ch => {
+                s.push(ch);
+            }
+        }
+    }
+    println!("uh oh {}", s);
+    IResult::Error(ErrorKind::IsNotStr)
+}
+
+// This parser does NOT allow newlines in strings.
+named!(pub string<ast::Expr>, delimited!(
+    tag!("\""),
+    call!(parse_string),
+    tag!("\"")
+));
+
+// This parser alows newlines in strings.
+// named!(pub string<ast::Expr>, do_parse!(
+//     s: map_res!(
+//         delimited!(
+//             tag!("\""),
+//             take_until!("\""),
+//             tag!("\"")
+//         ),
+//         str::from_utf8
+//     ) >>
+//     (ast::Expr::Lit(ast::Lit::Str(s.to_owned())))
+// ));
 
 // Parses a factor: '-'? int_lit
 named!(factor<ast::Expr>, map!(
     pair!(
         ws!(opt!(tag!("-"))),
-        alt!(unsigned_real | unsigned_int)
+        alt!(
+              unsigned_real
+            | unsigned_int
+            | parens
+            | do_parse!(ws!(tag!("true")) >> (ast::Expr::Lit(ast::Lit::Bool(true))))
+            | do_parse!(ws!(tag!("false")) >> (ast::Expr::Lit(ast::Lit::Bool(false))))
+            | do_parse!(ws!(tag!("nil")) >> (ast::Expr::Lit(ast::Lit::Nil)))
+            | ws!(string)
+        )
     ),
     |(sign, value): (Option<&[u8]>, ast::Expr)| {
         if sign.is_some() {
@@ -165,4 +223,19 @@ fn test_expr() {
         IResult::Done(&b""[..], String::from("3 + -2 - -2 - -2")));
     assert_eq!(expr(b"(45--8)* 33 / (2+ 66)").map(|x| format!("{}", x)),
         IResult::Done(&b""[..], String::from("(45 - -8) * 33 / (2 + 66)")));
+}
+
+#[test]
+fn test_string() {
+    assert_eq!(string(b"\"Hello, World!\"").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("\"Hello, World!\"")));
+    assert_eq!(string(b"\"Hello\\\\/,\\n \tWorld!\"").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("\"Hello\\/,\n \tWorld!\"")));
+    assert!(unsigned_int(b"\"").is_err());
+}
+
+#[test]
+fn test_mix() {
+    assert_eq!(expr(b"33 + -(\"abc\" * 2)").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("33 + -(\"abc\" * 2)")));
 }

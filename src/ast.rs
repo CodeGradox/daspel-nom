@@ -37,7 +37,7 @@ impl fmt::Display for Lit {
         match *self {
             Int(ref n) => fmt::Display::fmt(n, f),
             Real(ref r) => fmt::Display::fmt(r, f),
-            Str(ref s) => fmt::Display::fmt(s, f),
+            Str(ref s) => write!(f, "\"{}\"", s),
             Bool(ref b) => fmt::Display::fmt(b, f),
             Nil => write!(f, "nil"),
         }
