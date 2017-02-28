@@ -28,6 +28,7 @@ pub enum Lit {
     Real(f32),
     Str(String),
     Bool(bool),
+    Nil,
 }
 
 impl fmt::Display for Lit {
@@ -38,6 +39,7 @@ impl fmt::Display for Lit {
             Real(ref r) => fmt::Display::fmt(r, f),
             Str(ref s) => fmt::Display::fmt(s, f),
             Bool(ref b) => fmt::Display::fmt(b, f),
+            Nil => write!(f, "nil"),
         }
     }
 }
