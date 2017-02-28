@@ -14,11 +14,9 @@ impl fmt::Display for Expr {
         use self::Expr::*;
         match *self {
             Lit(ref l) => fmt::Display::fmt(l, f),
-            BinaryOp(ref op, ref e1, ref e2) =>
-                write!(f, "{} {} {}", e1, op.to_string(), e2),
-            UnaryOp(ref op, ref e) =>
-                write!(f, "{}{}", op.to_string(), e),
-            Paren(ref e) => write!(f, "({})", e),
+            BinaryOp(ref op, ref e1, ref e2) => write!(f, "{} {} {}", e1, op.to_string(), e2),
+            UnaryOp(ref op, ref e) => write!(f, "{}{}", op.to_string(), e),
+            Paren(ref e) =>write!(f, "({})", e),
             List(ref e) => write!(f, "[{:?}]", e),
         }
     }

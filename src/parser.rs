@@ -15,19 +15,45 @@ named!(parens<ast::Expr>, ws!(
 ));
 
 // Takes a digit and parses it into an i32
-named!(unsiged_int<ast::Expr>, alt_complete!(
+//
+// How it works:
+// First, it tries to find a decimal number.
+// complete! changes an incomplete find to an error.
+// recognize will return the full delimited (as it would only return the ".").
+// ws! must be outside of recognize, or else it would try to parse a string
+// with spaces, which would return an error.
+// Then it maps the &[u8] to a str, then a f32, then finally an Expr.
+named!(pub unsigned_real<ast::Expr>, alt_complete!(
     map!(
-        map!(
+        map_res!(
             map_res!(
-                map_res!(
-                    ws!(digit),
-                    str::from_utf8
+                ws!(
+                    recognize!(
+                        complete!(
+                            delimited!(digit, tag!("."), digit)
+                        )
+                    )
                 ),
-                FromStr::from_str
+                str::from_utf8
             ),
-            ast::Lit::Int
+            FromStr::from_str
         ),
-        ast::Expr::Lit
+        |r: f32| ast::Expr::Lit(ast::Lit::Real(r))
+    )
+    | parens
+));
+
+// Takes a digit and parses it into an i32
+named!(unsigned_int<ast::Expr>, alt_complete!(
+    map!(
+        map_res!(
+            map_res!(
+                ws!(digit),
+                str::from_utf8
+            ),
+            FromStr::from_str
+        ),
+        |n: i32| ast::Expr::Lit(ast::Lit::Int(n))
     )
     | parens
 ));
@@ -36,7 +62,7 @@ named!(unsiged_int<ast::Expr>, alt_complete!(
 named!(factor<ast::Expr>, map!(
     pair!(
         ws!(opt!(tag!("-"))),
-        unsiged_int
+        alt!(unsigned_real | unsigned_int)
     ),
     |(sign, value): (Option<&[u8]>, ast::Expr)| {
         if sign.is_some() {
@@ -78,39 +104,59 @@ named!(pub expr<ast::Expr>, do_parse!(
     (fold_expr(val, reminder))
 ));
 
-// #[test]
-// fn test_parens() {
-//     assert_eq!(parens(b"(42)"), IResult::Done(&b""[..], 42));
-//     assert_eq!(parens(b"(((4*10)+2))"), IResult::Done(&b""[..], 42));
-// }
+#[test]
+fn test_parens() {
+    assert_eq!(parens(b"(42)").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("(42)")));
+    assert_eq!(parens(b"(((4*10)+2))").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("(((4 * 10) + 2))")));
+}
 
-// #[test]
-// fn test_unsiged_int() {
-//     assert_eq!(unsiged_int(b"42"), IResult::Done(&b""[..], 42));
-//     assert_eq!(unsiged_int(b"  42  "), IResult::Done(&b""[..], 42));
-//     assert!(unsiged_int(b"nan").is_err());
-// }
+#[test]
+fn test_unsiged_int() {
+    assert_eq!(unsigned_int(b"42").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("42")));
+    assert_eq!(unsigned_int(b"   42   ").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("42")));
+    assert!(unsigned_int(b"nan").is_err());
+}
 
-// #[test]
-// fn test_sign() {
-//     assert_eq!(factor(b"-42"), IResult::Done(&b""[..], -42));
-//     assert_eq!(factor(b" -   42"), IResult::Done(&b""[..], -42));
-// }
+#[test]
+fn test_unsigned_real() {
+    assert_eq!(unsigned_real(b"4.14").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("4.14")));
+    assert_eq!(unsigned_real(b"3.14532").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("3.14532")));
+}
 
-// #[test]
-// fn test_term() {
-//     assert_eq!(term(b"3*2"), IResult::Done(&b""[..], 6));
-//     assert_eq!(term(b"25 / 5"), IResult::Done(&b""[..], 5));
-//     assert_eq!(term(b"3/3*2*10"), IResult::Done(&b""[..], 20));
-//     assert_eq!(term(b"-5*-5/5"), IResult::Done(&b""[..], 5));
-// }
+#[test]
+fn test_factor() {
+    assert_eq!(factor(b"-4.14").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("-4.14")));
+    assert_eq!(factor(b"  -  3.14532").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("-3.14532")));
+    assert_eq!(factor(b"  -  35").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("-35")));
+}
 
-// #[test]
-// fn test_expr() {
-//     assert_eq!(expr(b"3 + 2"), IResult::Done(&b""[..], 5));
-//     assert_eq!(expr(b"3 - 2"), IResult::Done(&b""[..], 1));
-//     assert_eq!(expr(b" 3 -   - 2"), IResult::Done(&b""[..], 5));
-//     assert_eq!(expr(b"-9+-2--3"), IResult::Done(&b""[..], -8));
-//     assert_eq!(expr(b"12+34-9-9+0"), IResult::Done(&b""[..], 28));
-//     assert_eq!(expr(b"3 + 2 * 4"), IResult::Done(&b""[..], 11));
-// }
+#[test]
+fn test_term() {
+    assert_eq!(term(b"3*2").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("3 * 2")));
+    assert_eq!(term(b"25   / 5").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("25 / 5")));
+    assert_eq!(term(b"-5*5/-9").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("-5 * 5 / -9")));
+}
+
+#[test]
+fn test_expr() {
+    assert_eq!(expr(b"3+2").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("3 + 2")));
+    assert_eq!(expr(b"3   -2").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("3 - 2")));
+    assert_eq!(expr(b"3+-2--2--2").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("3 + -2 - -2 - -2")));
+    assert_eq!(expr(b"(45--8)* 33 / (2+ 66)").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("(45 - -8) * 33 / (2 + 66)")));
+}
