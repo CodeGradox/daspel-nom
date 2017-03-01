@@ -1,99 +1,345 @@
-use nom::{IResult, digit};
+use nom::{IResult, ErrorKind, digit};
 
 use std::str;
 use std::str::FromStr;
 
-named!(parens<i32>, ws!( delimited!( tag!("("), expr, tag!(")") ) ) );
+use ast;
+
+/// Skips whitespaces and comments.
+///
+/// Comments start with a `#` and end with a newline.
+/// Anything inside a comment is ignored.
+pub fn skip_ws_comment(input: &[u8]) -> IResult<&[u8], &[u8]>  {
+    let mut idx = 0;
+    let limit = input.len();
+    while idx < limit {
+        match input[idx] as char {
+           ' ' | '\t' | '\r' | '\n' => idx += 1,
+           '#' => {
+                while idx < limit && input[idx] != ('\n' as u8) {
+                    idx += 1;
+                }
+                // 10u8 == '\n'
+                // idx += input[idx..].iter().take_while(|&ch| ch != &10).count();
+           }
+            _ => break,
+        }
+    }
+    IResult::Done(&input[idx..], &input[0..0])
+}
+
+// Parser generator for skipping whitespaces and comments.
+#[macro_export]
+macro_rules! wsc {
+    ($i:expr, $($args:tt)*) => {{
+        sep!($i, skip_ws_comment, $($args)*)
+    }}
+}
+
+// Parsens an expression wrapped by parenthesis: '(' expr ')'
+named!(parens<ast::Expr>, wsc!(
+    delimited!(
+        tag!("("),
+        map!(map!(or_expr, Box::new), ast::Expr::Paren),
+        tag!(")")
+    )
+));
 
 // Takes a digit and parses it into an i32
-named!(factor<i32>,
-    alt!(
+//
+// How it works:
+// First, it tries to find a decimal number.
+// complete! changes an incomplete find to an error.
+// recognize! will return the full delimited match (as opposed to only return the ".").
+// wsc! must be outside of recognize! or else it would try to parse a string
+// with spaces, which would return an error.
+// Then it maps the &[u8] to a str, then a f32, then finally an Expr.
+// If it fails to find or parse a real, it will call parsens.
+named!(unsigned_real<ast::Expr>, map!(
+    map_res!(
         map_res!(
-            map_res!(
-                ws!(digit),
-                str::from_utf8
+            wsc!(
+                recognize!(
+                    complete!(
+                        delimited!(digit, tag!("."), digit)
+                    )
+                )
             ),
-            FromStr::from_str
-        )
-        | parens
-    )
-);
-
-named!(sign<i32>,
-    map!(
-        pair!(
-            ws!(opt!(tag!("-"))),
-            factor
+            str::from_utf8
         ),
-        |(sign, value): (Option<&[u8]>, i32)| {
-            if sign.is_some() { -value } else { value }
+        FromStr::from_str
+    ),
+    |r: f32| ast::Expr::Lit(ast::Lit::Real(r))
+));
+
+// Takes a digit and parses it into an i32
+//
+// How it works:
+// It finds a digit, then turns the &[u8] into a str.
+// Then the str is parsed into an int and is finally returned as an Expr::Lit.
+// If it fails to find or parse a real, it will call parsens.
+named!(unsigned_int<ast::Expr>, map!(
+    map_res!(
+        map_res!(
+            wsc!(digit),
+            str::from_utf8
+        ),
+        FromStr::from_str
+    ),
+    |n: i32| ast::Expr::Lit(ast::Lit::Int(n))
+));
+
+fn parse_string(input: &[u8]) -> IResult<&[u8], ast::Expr> {
+    let mut s = String::new();
+    let chars = match str::from_utf8(input) {
+        Ok(ok) => ok,
+        Err(_) => return IResult::Error(ErrorKind::IsNotStr),
+    };
+    let mut chars = chars.char_indices();
+    while let Some((byte_offset, ch)) = chars.next() {
+        match ch {
+            '"' => {
+                let expr = ast::Expr::Lit(ast::Lit::Str(s));
+                return IResult::Done(&input[byte_offset..], expr);
+            }
+            '\\' => {
+                match chars.next() {
+                    Some((_, 'n')) => s.push('\n'),
+                    Some((_, 'r')) => s.push('\r'),
+                    Some((_, 't')) => s.push('\t'),
+                    Some((_, '"')) => s.push('"'),
+                    Some((_, '\'')) => s.push('\''),
+                    Some((_, '\\')) => s.push('\\'),
+                    Some((_, '\n')) | Some((_, '\r')) => return IResult::Error(ErrorKind::IsNotStr),
+                    _ => break,
+                }
+            }
+            '\r' | '\n' => return IResult::Error(ErrorKind::IsNotStr),
+            ch => {
+                s.push(ch);
+            }
         }
-    )
-);
+    }
+    IResult::Error(ErrorKind::IsNotStr)
+}
 
-// Parse terms (* and /)
-named!(pub term<i32>,
-    do_parse!(
-        val: sign >>
-        res: fold_many0!(
-            pair!(alt!(tag!("*") | tag!("/")), sign),
-            val,
-            |acc, (op, val): (&[u8], i32)| {
-                if (op[0] as char) == '*' { acc * val } else { acc / val }
-            }
-        ) >>
-        (res)
-    )
-);
+// This parser does NOT allow newlines in strings.
+named!(string<ast::Expr>, delimited!(
+    tag!("\""),
+    call!(parse_string),
+    tag!("\"")
+));
 
-// Parse expression (+ and -)
-named!(pub expr<i32>,
-    do_parse!(
-        val: term >>
-        res: fold_many0!(
-            pair!(alt!(tag!("+") | tag!("-")), term),
-            val,
-            |acc, (op, val): (&[u8], i32)| {
-                if (op[0] as char) == '+' { acc + val } else { acc - val }
-            }
-        ) >>
-        (res)
-    )
-);
+// Parses a factor: '-'? int_lit
+named!(factor<ast::Expr>, map!(
+    pair!(
+        wsc!(opt!(tag!("-"))),
+        alt!(
+              unsigned_real
+            | unsigned_int
+            | parens
+            | do_parse!(wsc!(tag!("true")) >> (ast::Expr::Lit(ast::Lit::Bool(true))))
+            | do_parse!(wsc!(tag!("false")) >> (ast::Expr::Lit(ast::Lit::Bool(false))))
+            | do_parse!(wsc!(tag!("nil")) >> (ast::Expr::Lit(ast::Lit::Nil)))
+            | wsc!(string)
+        )
+    ),
+    |(sign, value): (Option<&[u8]>, ast::Expr)| {
+        if sign.is_some() {
+            ast::Expr::UnaryOp(ast::UnOp::Neg, Box::new(value))
+        } else {
+            value
+        }
+    }
+));
+
+fn fold_expr(initial: ast::Expr, remainder: Vec<(ast::BinOp, ast::Expr)>) -> ast::Expr {
+    remainder.into_iter().fold(initial, |acc, pair| {
+        let (oper, expr) = pair;
+        ast::Expr::BinaryOp(oper, Box::new(acc), Box::new(expr))
+    })
+}
+
+// Parse terms: factor (('+' | '-') factor)*
+named!(term<ast::Expr>, do_parse!(
+    val: factor >>
+    reminder: many0!(
+        alt!(
+            do_parse!(tag!("*") >> mul: factor >> (ast::BinOp::Mul, mul)) |
+            do_parse!(tag!("/") >> div: factor >> (ast::BinOp::Div, div))
+        )
+    ) >>
+    (fold_expr(val, reminder))
+));
+
+// Parse expression: term  (('+' | '-') term)*
+named!(expr<ast::Expr>, do_parse!(
+    val: term >>
+    reminder: many0!(
+        alt!(
+            do_parse!(tag!("+") >> add: term >> (ast::BinOp::Add, add)) |
+            do_parse!(tag!("-") >> sub: term >> (ast::BinOp::Sub, sub))
+        )
+    ) >>
+    (fold_expr(val, reminder))
+));
+
+// Parse comparison expression: not_expr (('&') not_expr)*
+named!(comp_expr<ast::Expr>, do_parse!(
+    val: expr >>
+    reminder: many0!(
+        alt!(
+            do_parse!(tag!("==") >> eq: expr >> (ast::BinOp::Eq, eq)) |
+            do_parse!(tag!("!=") >> ne: expr >> (ast::BinOp::Ne, ne)) |
+            do_parse!(tag!(">")  >> gt: expr >> (ast::BinOp::Gt, gt)) |
+            do_parse!(tag!(">=") >> ge: expr >> (ast::BinOp::Ge, ge)) |
+            do_parse!(tag!("<")  >> lt: expr >> (ast::BinOp::Lt, lt)) |
+            do_parse!(tag!("<=") >> le: expr >> (ast::BinOp::Le, le))
+        )
+    ) >>
+    (fold_expr(val, reminder))
+));
+
+// Parse logical not expression: `!`? comp_expr
+//
+// This one is a bit dumb because we can't have a comp_expr be
+// followed by a `!`. The following is illegal: x == !x
+// Instead we must write: x == (!x)
+// Maybe we can change how the parsing happens at a later
+// stage and just check the UnOp when we check the type.
+named!(not_expr<ast::Expr>, map!(
+    pair!(
+        wsc!(opt!(tag!("!"))),
+        comp_expr
+    ),
+    |(sign, value): (Option<&[u8]>, ast::Expr)| {
+        if sign.is_some() {
+            ast::Expr::UnaryOp(ast::UnOp::Not, Box::new(value))
+        } else {
+            value
+        }
+    }
+));
+
+// Parse and (`&`) expression: not_expr (('&') not_expr)*
+named!(and_expr<ast::Expr>, do_parse!(
+    val: not_expr >>
+    reminder: many0!(
+        do_parse!(tag!("&") >> not: not_expr >> (ast::BinOp::And, not))
+    ) >>
+    (fold_expr(val, reminder))
+));
+
+// Parse or (`|`) expression: and_expr (('|') and_expr)*
+named!(or_expr<ast::Expr>, do_parse!(
+    val: and_expr >>
+    reminder: many0!(
+        do_parse!(tag!("|") >> and: and_expr >> (ast::BinOp::Or, and))
+    ) >>
+    (fold_expr(val, reminder))
+));
+
+// Entry point for the parser.
+named!(pub run<ast::Expr>, call!(or_expr));
 
 #[test]
 fn test_parens() {
-    assert_eq!(factor(b"(42)"), IResult::Done(&b""[..], 42));
-    assert_eq!(factor(b"(((4*10)+2))"), IResult::Done(&b""[..], 42));
+    assert_eq!(parens(b"(42)").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("(42)")));
+    assert_eq!(parens(b"(((4*10)+2))").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("(((4 * 10) + 2))")));
+}
+
+#[test]
+fn test_unsiged_int() {
+    assert_eq!(unsigned_int(b"42").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("42")));
+    assert_eq!(unsigned_int(b"   42   ").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("42")));
+    assert!(unsigned_int(b"nan").is_err());
+}
+
+#[test]
+fn test_unsigned_real() {
+    assert_eq!(unsigned_real(b"4.14").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("4.14")));
+    assert_eq!(unsigned_real(b"3.14532").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("3.14532")));
 }
 
 #[test]
 fn test_factor() {
-    assert_eq!(factor(b"42"), IResult::Done(&b""[..], 42));
-    assert_eq!(factor(b"  42  "), IResult::Done(&b""[..], 42));
-    assert!(factor(b"nan").is_err());
-}
-
-#[test]
-fn test_sign() {
-    assert_eq!(sign(b"-42"), IResult::Done(&b""[..], -42));
-    assert_eq!(sign(b" -   42"), IResult::Done(&b""[..], -42));
+    assert_eq!(factor(b"-4.14").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("-4.14")));
+    assert_eq!(factor(b"  -  3.14532").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("-3.14532")));
+    assert_eq!(factor(b"  -  35").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("-35")));
 }
 
 #[test]
 fn test_term() {
-    assert_eq!(term(b"3*2"), IResult::Done(&b""[..], 6));
-    assert_eq!(term(b"25 / 5"), IResult::Done(&b""[..], 5));
-    assert_eq!(term(b"3/3*2*10"), IResult::Done(&b""[..], 20));
-    assert_eq!(term(b"-5*-5/5"), IResult::Done(&b""[..], 5));
+    assert_eq!(term(b"3*2").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("3 * 2")));
+    assert_eq!(term(b"25   / 5").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("25 / 5")));
+    assert_eq!(term(b"-5*5/-9").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("-5 * 5 / -9")));
 }
 
 #[test]
 fn test_expr() {
-    assert_eq!(expr(b"3 + 2"), IResult::Done(&b""[..], 5));
-    assert_eq!(expr(b"3 - 2"), IResult::Done(&b""[..], 1));
-    assert_eq!(expr(b" 3 -   - 2"), IResult::Done(&b""[..], 5));
-    assert_eq!(expr(b"-9+-2--3"), IResult::Done(&b""[..], -8));
-    assert_eq!(expr(b"12+34-9-9+0"), IResult::Done(&b""[..], 28));
-    assert_eq!(expr(b"3 + 2 * 4"), IResult::Done(&b""[..], 11));
+    assert_eq!(expr(b"3+2").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("3 + 2")));
+    assert_eq!(expr(b"3   -2").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("3 - 2")));
+    assert_eq!(expr(b"3+-2--2--2").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("3 + -2 - -2 - -2")));
+    assert_eq!(expr(b"(45--8)* 33 / (2+ 66)").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("(45 - -8) * 33 / (2 + 66)")));
+}
+
+#[test]
+fn test_string() {
+    assert_eq!(string(b"\"Hello, World!\"").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("\"Hello, World!\"")));
+    assert_eq!(string(b"\"Hello\\\\/,\\n \tWorld!\"").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("\"Hello\\/,\n \tWorld!\"")));
+    assert!(unsigned_int(b"\"").is_err());
+}
+
+#[test]
+fn test_mix() {
+    assert_eq!(expr(b"33 + -(\"abc\" * 2)").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("33 + -(\"abc\" * 2)")));
+}
+
+#[test]
+fn test_comments() {
+    assert_eq!(expr(b"\t33 #lettis\n   + # comment\n  # hmm \n 2").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("33 + 2")));
+}
+
+#[test]
+fn test_comp_expr() {
+    assert_eq!(comp_expr(b"true == (false != false)").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("true == (false != false)")));
+}
+
+#[test]
+fn test_not_expr() {
+    assert_eq!(not_expr(b"!true != (!false)").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("!true != (!false)")));
+}
+
+#[test]
+fn test_and_expr() {
+    assert_eq!(and_expr(b"(false&false)&true").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("(false & false) & true")));
+}
+
+#[test]
+fn test_or_expr() {
+    assert_eq!(or_expr(b" true&true|(!false|true)").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("true & true | (!false | true)")));
 }
