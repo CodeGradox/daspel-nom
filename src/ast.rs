@@ -50,6 +50,14 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
+    Eq,
+    Ne,
+    Gt,
+    Ge,
+    Lt,
+    Le,
+    And,
+    Or,
 }
 
 impl BinOp {
@@ -60,6 +68,14 @@ impl BinOp {
             Sub => "-",
             Mul => "*",
             Div => "/",
+            Eq  => "==",
+            Ne  => "!=",
+            Gt  => ">",
+            Ge  => ">=",
+            Lt  => "<",
+            Le  => "<=",
+            And => "&",
+            Or => "|",
         }
     }
 }

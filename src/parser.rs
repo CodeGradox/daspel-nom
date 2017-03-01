@@ -28,6 +28,7 @@ pub fn skip_ws_comment(input: &[u8]) -> IResult<&[u8], &[u8]>  {
     IResult::Done(&input[idx..], &input[0..0])
 }
 
+// Parser generator for skipping whitespaces and comments.
 #[macro_export]
 macro_rules! wsc {
     ($i:expr, $($args:tt)*) => {{
@@ -39,7 +40,7 @@ macro_rules! wsc {
 named!(parens<ast::Expr>, wsc!(
     delimited!(
         tag!("("),
-        map!(map!(expr, Box::new), ast::Expr::Paren),
+        map!(map!(or_expr, Box::new), ast::Expr::Paren),
         tag!(")")
     )
 ));
@@ -54,7 +55,7 @@ named!(parens<ast::Expr>, wsc!(
 // with spaces, which would return an error.
 // Then it maps the &[u8] to a str, then a f32, then finally an Expr.
 // If it fails to find or parse a real, it will call parsens.
-named!(pub unsigned_real<ast::Expr>, map!(
+named!(unsigned_real<ast::Expr>, map!(
     map_res!(
         map_res!(
             wsc!(
@@ -109,8 +110,7 @@ fn parse_string(input: &[u8]) -> IResult<&[u8], ast::Expr> {
                     Some((_, '"')) => s.push('"'),
                     Some((_, '\'')) => s.push('\''),
                     Some((_, '\\')) => s.push('\\'),
-                    Some((_, '\n')) | Some((_, '\r')) =>
-                        return IResult::Error(ErrorKind::IsNotStr),
+                    Some((_, '\n')) | Some((_, '\r')) => return IResult::Error(ErrorKind::IsNotStr),
                     _ => break,
                 }
             }
@@ -124,7 +124,7 @@ fn parse_string(input: &[u8]) -> IResult<&[u8], ast::Expr> {
 }
 
 // This parser does NOT allow newlines in strings.
-named!(pub string<ast::Expr>, delimited!(
+named!(string<ast::Expr>, delimited!(
     tag!("\""),
     call!(parse_string),
     tag!("\"")
@@ -173,7 +173,7 @@ named!(term<ast::Expr>, do_parse!(
 ));
 
 // Parse expression: term  (('+' | '-') term)*
-named!(pub expr<ast::Expr>, do_parse!(
+named!(expr<ast::Expr>, do_parse!(
     val: term >>
     reminder: many0!(
         alt!(
@@ -183,6 +183,64 @@ named!(pub expr<ast::Expr>, do_parse!(
     ) >>
     (fold_expr(val, reminder))
 ));
+
+// Parse comparison expression: not_expr (('&') not_expr)*
+named!(comp_expr<ast::Expr>, do_parse!(
+    val: expr >>
+    reminder: many0!(
+        alt!(
+            do_parse!(tag!("==") >> eq: expr >> (ast::BinOp::Eq, eq)) |
+            do_parse!(tag!("!=") >> ne: expr >> (ast::BinOp::Ne, ne)) |
+            do_parse!(tag!(">")  >> gt: expr >> (ast::BinOp::Gt, gt)) |
+            do_parse!(tag!(">=") >> ge: expr >> (ast::BinOp::Ge, ge)) |
+            do_parse!(tag!("<")  >> lt: expr >> (ast::BinOp::Lt, lt)) |
+            do_parse!(tag!("<=") >> le: expr >> (ast::BinOp::Le, le))
+        )
+    ) >>
+    (fold_expr(val, reminder))
+));
+
+// Parse logical not expression: `!`? comp_expr
+//
+// This one is a bit dumb because we can't have a comp_expr be
+// followed by a `!`. The following is illegal: x == !x
+// Instead we must write: x == (!x)
+// Maybe we can change how the parsing happens at a later
+// stage and just check the UnOp when we check the type.
+named!(not_expr<ast::Expr>, map!(
+    pair!(
+        wsc!(opt!(tag!("!"))),
+        comp_expr
+    ),
+    |(sign, value): (Option<&[u8]>, ast::Expr)| {
+        if sign.is_some() {
+            ast::Expr::UnaryOp(ast::UnOp::Not, Box::new(value))
+        } else {
+            value
+        }
+    }
+));
+
+// Parse and (`&`) expression: not_expr (('&') not_expr)*
+named!(and_expr<ast::Expr>, do_parse!(
+    val: not_expr >>
+    reminder: many0!(
+        do_parse!(tag!("&") >> not: not_expr >> (ast::BinOp::And, not))
+    ) >>
+    (fold_expr(val, reminder))
+));
+
+// Parse or (`|`) expression: and_expr (('|') and_expr)*
+named!(or_expr<ast::Expr>, do_parse!(
+    val: and_expr >>
+    reminder: many0!(
+        do_parse!(tag!("|") >> and: and_expr >> (ast::BinOp::Or, and))
+    ) >>
+    (fold_expr(val, reminder))
+));
+
+// Entry point for the parser.
+named!(pub run<ast::Expr>, call!(or_expr));
 
 #[test]
 fn test_parens() {
@@ -260,4 +318,28 @@ fn test_mix() {
 fn test_comments() {
     assert_eq!(expr(b"\t33 #lettis\n   + # comment\n  # hmm \n 2").map(|x| format!("{}", x)),
         IResult::Done(&b""[..], String::from("33 + 2")));
+}
+
+#[test]
+fn test_comp_expr() {
+    assert_eq!(comp_expr(b"true == (false != false)").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("true == (false != false)")));
+}
+
+#[test]
+fn test_not_expr() {
+    assert_eq!(not_expr(b"!true != (!false)").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("!true != (!false)")));
+}
+
+#[test]
+fn test_and_expr() {
+    assert_eq!(and_expr(b"(false&false)&true").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("(false & false) & true")));
+}
+
+#[test]
+fn test_or_expr() {
+    assert_eq!(or_expr(b" true&true|(!false|true)").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("true & true | (!false | true)")));
 }
