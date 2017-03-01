@@ -9,7 +9,7 @@ use ast;
 ///
 /// Comments start with a `#` and end with a newline.
 /// Anything inside a comment is ignored.
-pub fn skip_ws_comment(input: &[u8]) -> IResult<&[u8], &[u8]>  {
+fn skip_ws_comment(input: &[u8]) -> IResult<&[u8], &[u8]>  {
     let mut idx = 0;
     let limit = input.len();
     while idx < limit {
@@ -241,105 +241,3 @@ named!(or_expr<ast::Expr>, do_parse!(
 
 // Entry point for the parser.
 named!(pub run<ast::Expr>, call!(or_expr));
-
-#[test]
-fn test_parens() {
-    assert_eq!(parens(b"(42)").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("(42)")));
-    assert_eq!(parens(b"(((4*10)+2))").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("(((4 * 10) + 2))")));
-}
-
-#[test]
-fn test_unsiged_int() {
-    assert_eq!(unsigned_int(b"42").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("42")));
-    assert_eq!(unsigned_int(b"   42   ").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("42")));
-    assert!(unsigned_int(b"nan").is_err());
-}
-
-#[test]
-fn test_unsigned_real() {
-    assert_eq!(unsigned_real(b"4.14").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("4.14")));
-    assert_eq!(unsigned_real(b"3.14532").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("3.14532")));
-}
-
-#[test]
-fn test_factor() {
-    assert_eq!(factor(b"-4.14").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("-4.14")));
-    assert_eq!(factor(b"  -  3.14532").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("-3.14532")));
-    assert_eq!(factor(b"  -  35").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("-35")));
-}
-
-#[test]
-fn test_term() {
-    assert_eq!(term(b"3*2").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("3 * 2")));
-    assert_eq!(term(b"25   / 5").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("25 / 5")));
-    assert_eq!(term(b"-5*5/-9").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("-5 * 5 / -9")));
-}
-
-#[test]
-fn test_expr() {
-    assert_eq!(expr(b"3+2").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("3 + 2")));
-    assert_eq!(expr(b"3   -2").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("3 - 2")));
-    assert_eq!(expr(b"3+-2--2--2").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("3 + -2 - -2 - -2")));
-    assert_eq!(expr(b"(45--8)* 33 / (2+ 66)").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("(45 - -8) * 33 / (2 + 66)")));
-}
-
-#[test]
-fn test_string() {
-    assert_eq!(string(b"\"Hello, World!\"").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("\"Hello, World!\"")));
-    assert_eq!(string(b"\"Hello\\\\/,\\n \tWorld!\"").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("\"Hello\\/,\n \tWorld!\"")));
-    assert!(unsigned_int(b"\"").is_err());
-}
-
-#[test]
-fn test_mix() {
-    assert_eq!(expr(b"33 + -(\"abc\" * 2)").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("33 + -(\"abc\" * 2)")));
-}
-
-#[test]
-fn test_comments() {
-    assert_eq!(expr(b"\t33 #lettis\n   + # comment\n  # hmm \n 2").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("33 + 2")));
-}
-
-#[test]
-fn test_comp_expr() {
-    assert_eq!(comp_expr(b"true == (false != false)").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("true == (false != false)")));
-}
-
-#[test]
-fn test_not_expr() {
-    assert_eq!(not_expr(b"!true != (!false)").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("!true != (!false)")));
-}
-
-#[test]
-fn test_and_expr() {
-    assert_eq!(and_expr(b"(false&false)&true").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("(false & false) & true")));
-}
-
-#[test]
-fn test_or_expr() {
-    assert_eq!(or_expr(b" true&true|(!false|true)").map(|x| format!("{}", x)),
-        IResult::Done(&b""[..], String::from("true & true | (!false | true)")));
-}
