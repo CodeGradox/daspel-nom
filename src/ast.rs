@@ -2,6 +2,7 @@ use std::fmt;
 
 #[derive(Debug)]
 pub enum Expr {
+    Ident(String),
     Lit(Lit),
     BinaryOp(BinOp, Box<Expr>, Box<Expr>),
     UnaryOp(UnOp, Box<Expr>),
@@ -13,10 +14,11 @@ impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use self::Expr::*;
         match *self {
+            Ident(ref i) => fmt::Display::fmt(i, f),
             Lit(ref l) => fmt::Display::fmt(l, f),
             BinaryOp(ref op, ref e1, ref e2) => write!(f, "{} {} {}", e1, op.to_string(), e2),
             UnaryOp(ref op, ref e) => write!(f, "{}{}", op.to_string(), e),
-            Paren(ref e) =>write!(f, "({})", e),
+            Paren(ref e) => write!(f, "({})", e),
             List(ref e) => write!(f, "[{:?}]", e),
         }
     }
@@ -68,12 +70,12 @@ impl BinOp {
             Sub => "-",
             Mul => "*",
             Div => "/",
-            Eq  => "==",
-            Ne  => "!=",
-            Gt  => ">",
-            Ge  => ">=",
-            Lt  => "<",
-            Le  => "<=",
+            Eq => "==",
+            Ne => "!=",
+            Gt => ">",
+            Ge => ">=",
+            Lt => "<",
+            Le => "<=",
             And => "&",
             Or => "|",
         }

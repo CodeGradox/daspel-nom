@@ -1,4 +1,3 @@
-#[macro_use]
 extern crate daspel_rs;
 
 use daspel_rs::parser;

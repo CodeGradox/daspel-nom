@@ -1,4 +1,4 @@
-use nom::{IResult, ErrorKind, digit};
+use nom::{IResult, ErrorKind, digit, multispace};
 
 use std::str;
 use std::str::FromStr;
@@ -9,19 +9,19 @@ use ast;
 ///
 /// Comments start with a `#` and end with a newline.
 /// Anything inside a comment is ignored.
-fn skip_ws_comment(input: &[u8]) -> IResult<&[u8], &[u8]>  {
+fn skip_ws_comment(input: &[u8]) -> IResult<&[u8], &[u8]> {
     let mut idx = 0;
     let limit = input.len();
     while idx < limit {
-        match input[idx] as char {
-           ' ' | '\t' | '\r' | '\n' => idx += 1,
-           '#' => {
-                while idx < limit && input[idx] != ('\n' as u8) {
+        match input[idx] {
+            b' ' | b'\t' | b'\r' | b'\n' => idx += 1,
+            b'#' => {
+                while idx < limit && input[idx] != b'\n' {
                     idx += 1;
                 }
                 // 10u8 == '\n'
                 // idx += input[idx..].iter().take_while(|&ch| ch != &10).count();
-           }
+            }
             _ => break,
         }
     }
@@ -130,6 +130,18 @@ named!(string<ast::Expr>, delimited!(
     tag!("\"")
 ));
 
+fn is_space(input: u8) -> bool {
+    " \t\r\n!?.,;:&=<>+-*/@(){}[]^~\\%$".find(input as char).is_some()
+}
+
+named!(ident<ast::Expr>, map!(
+    map_res!(
+        take_till!(is_space),
+        str::from_utf8
+    ),
+    |s: &str| ast::Expr::Ident(String::from(s))
+));
+
 // Parses a factor: '-'? int_lit
 named!(factor<ast::Expr>, map!(
     pair!(
@@ -142,6 +154,7 @@ named!(factor<ast::Expr>, map!(
             | do_parse!(wsc!(tag!("false")) >> (ast::Expr::Lit(ast::Lit::Bool(false))))
             | do_parse!(wsc!(tag!("nil")) >> (ast::Expr::Lit(ast::Lit::Nil)))
             | wsc!(string)
+            | wsc!(ident)
         )
     ),
     |(sign, value): (Option<&[u8]>, ast::Expr)| {
