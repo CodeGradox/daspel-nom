@@ -5,8 +5,38 @@ use std::str::FromStr;
 
 use ast;
 
+/// Skips whitespaces and comments.
+///
+/// Comments start with a `#` and end with a newline.
+/// Anything inside a comment is ignored.
+pub fn skip_ws_comment(input: &[u8]) -> IResult<&[u8], &[u8]>  {
+    let mut idx = 0;
+    let limit = input.len();
+    while idx < limit {
+        match input[idx] as char {
+           ' ' | '\t' | '\r' | '\n' => idx += 1,
+           '#' => {
+                while idx < limit && input[idx] != ('\n' as u8) {
+                    idx += 1;
+                }
+                // 10u8 == '\n'
+                // idx += input[idx..].iter().take_while(|&ch| ch != &10).count();
+           }
+            _ => break,
+        }
+    }
+    IResult::Done(&input[idx..], &input[0..0])
+}
+
+#[macro_export]
+macro_rules! wsc {
+    ($i:expr, $($args:tt)*) => {{
+        sep!($i, skip_ws_comment, $($args)*)
+    }}
+}
+
 // Parsens an expression wrapped by parenthesis: '(' expr ')'
-named!(parens<ast::Expr>, ws!(
+named!(parens<ast::Expr>, wsc!(
     delimited!(
         tag!("("),
         map!(map!(expr, Box::new), ast::Expr::Paren),
@@ -20,14 +50,14 @@ named!(parens<ast::Expr>, ws!(
 // First, it tries to find a decimal number.
 // complete! changes an incomplete find to an error.
 // recognize! will return the full delimited match (as opposed to only return the ".").
-// ws! must be outside of recognize! or else it would try to parse a string
+// wsc! must be outside of recognize! or else it would try to parse a string
 // with spaces, which would return an error.
 // Then it maps the &[u8] to a str, then a f32, then finally an Expr.
 // If it fails to find or parse a real, it will call parsens.
 named!(pub unsigned_real<ast::Expr>, map!(
     map_res!(
         map_res!(
-            ws!(
+            wsc!(
                 recognize!(
                     complete!(
                         delimited!(digit, tag!("."), digit)
@@ -50,7 +80,7 @@ named!(pub unsigned_real<ast::Expr>, map!(
 named!(unsigned_int<ast::Expr>, map!(
     map_res!(
         map_res!(
-            ws!(digit),
+            wsc!(digit),
             str::from_utf8
         ),
         FromStr::from_str
@@ -90,7 +120,6 @@ fn parse_string(input: &[u8]) -> IResult<&[u8], ast::Expr> {
             }
         }
     }
-    println!("uh oh {}", s);
     IResult::Error(ErrorKind::IsNotStr)
 }
 
@@ -101,31 +130,18 @@ named!(pub string<ast::Expr>, delimited!(
     tag!("\"")
 ));
 
-// This parser alows newlines in strings.
-// named!(pub string<ast::Expr>, do_parse!(
-//     s: map_res!(
-//         delimited!(
-//             tag!("\""),
-//             take_until!("\""),
-//             tag!("\"")
-//         ),
-//         str::from_utf8
-//     ) >>
-//     (ast::Expr::Lit(ast::Lit::Str(s.to_owned())))
-// ));
-
 // Parses a factor: '-'? int_lit
 named!(factor<ast::Expr>, map!(
     pair!(
-        ws!(opt!(tag!("-"))),
+        wsc!(opt!(tag!("-"))),
         alt!(
               unsigned_real
             | unsigned_int
             | parens
-            | do_parse!(ws!(tag!("true")) >> (ast::Expr::Lit(ast::Lit::Bool(true))))
-            | do_parse!(ws!(tag!("false")) >> (ast::Expr::Lit(ast::Lit::Bool(false))))
-            | do_parse!(ws!(tag!("nil")) >> (ast::Expr::Lit(ast::Lit::Nil)))
-            | ws!(string)
+            | do_parse!(wsc!(tag!("true")) >> (ast::Expr::Lit(ast::Lit::Bool(true))))
+            | do_parse!(wsc!(tag!("false")) >> (ast::Expr::Lit(ast::Lit::Bool(false))))
+            | do_parse!(wsc!(tag!("nil")) >> (ast::Expr::Lit(ast::Lit::Nil)))
+            | wsc!(string)
         )
     ),
     |(sign, value): (Option<&[u8]>, ast::Expr)| {
@@ -238,4 +254,10 @@ fn test_string() {
 fn test_mix() {
     assert_eq!(expr(b"33 + -(\"abc\" * 2)").map(|x| format!("{}", x)),
         IResult::Done(&b""[..], String::from("33 + -(\"abc\" * 2)")));
+}
+
+#[test]
+fn test_comments() {
+    assert_eq!(expr(b"\t33 #lettis\n   + # comment\n  # hmm \n 2").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("33 + 2")));
 }
