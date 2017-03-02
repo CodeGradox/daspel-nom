@@ -81,7 +81,7 @@ named!(expr<ast::Expr>, do_parse!(
     (fold_expr(val, reminder))
 ));
 
-// Parse terms: factor (('+' | '-') factor)*
+// Parse terms: factor (('*' | '/') factor)*
 named!(term<ast::Expr>, do_parse!(
     val: factor >>
     reminder: many0!(
@@ -98,14 +98,14 @@ named!(factor<ast::Expr>, map!(
     pair!(
         wsc!(opt!(tag!("-"))),
         alt!(
-              unsigned_real
-            | unsigned_int
-            | parens
-            | do_parse!(wsc!(tag!("true")) >> (ast::Expr::Lit(ast::Lit::Bool(true))))
-            | do_parse!(wsc!(tag!("false")) >> (ast::Expr::Lit(ast::Lit::Bool(false))))
-            | do_parse!(wsc!(tag!("nil")) >> (ast::Expr::Lit(ast::Lit::Nil)))
-            | wsc!(string)
-            | wsc!(ident)
+            unsigned_real |
+            unsigned_int |
+            parens |
+            do_parse!(wsc!(tag!("true")) >> (ast::Expr::Lit(ast::Lit::Bool(true)))) |
+            do_parse!(wsc!(tag!("false")) >> (ast::Expr::Lit(ast::Lit::Bool(false)))) |
+            do_parse!(wsc!(tag!("nil")) >> (ast::Expr::Lit(ast::Lit::Nil))) |
+            wsc!(string) |
+            wsc!(ident)
         )
     ),
     |(sign, value): (Option<&[u8]>, ast::Expr)| {
@@ -173,22 +173,24 @@ named!(parens<ast::Expr>, wsc!(
 // This parser does NOT allow newlines in strings.
 named!(string<ast::Expr>, delimited!(
     tag!("\""),
-    call!(parse_string),
+    parse_string,
     tag!("\"")
 ));
 
 // Parser for identities (names).
 named!(ident<ast::Expr>, map!(
-    map_res!(
-        take_till!(invalid_indent_char),
-        str::from_utf8
+    verify!(
+        map_res!(
+            take_till!(invalid_indent_char),
+            str::from_utf8
+        ), |s: &str| !s.is_empty()
     ),
     |s: &str| ast::Expr::Ident(String::from(s))
 ));
 
 // Checks is input is a non character or number.
 fn invalid_indent_char(input: u8) -> bool {
-    " \t\r\n!?.,;:&=<>+-*/@(){}[]^~\\%$".find(input as char).is_some()
+    " \t\r\n\"!?.,;:&=<>+-*/@(){}[]^~\\%$".find(input as char).is_some()
 }
 
 // Folds a series of operators and expressions to a AST.
@@ -213,8 +215,6 @@ fn skip_ws_comment(input: &[u8]) -> IResult<&[u8], &[u8]> {
                 while idx < limit && input[idx] != b'\n' {
                     idx += 1;
                 }
-                // 10u8 == '\n'
-                // idx += input[idx..].iter().take_while(|&ch| ch != &10).count();
             }
             _ => break,
         }

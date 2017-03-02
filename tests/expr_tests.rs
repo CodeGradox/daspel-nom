@@ -66,6 +66,7 @@ fn test_string() {
                IResult::Done(&b""[..], String::from("\"Hello, World!\"")));
     assert_eq!(run(b"\"Hello\\\\/,\\n \tWorld!\"").map(|x| format!("{}", x)),
                IResult::Done(&b""[..], String::from("\"Hello\\/,\n \tWorld!\"")));
+    assert!(run(b"\"").is_err());
 }
 
 #[test]
