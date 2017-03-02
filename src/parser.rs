@@ -130,13 +130,15 @@ named!(string<ast::Expr>, delimited!(
     tag!("\"")
 ));
 
-fn is_space(input: u8) -> bool {
+// Checks is input is a non character or number.
+fn invalid_indent_char(input: u8) -> bool {
     " \t\r\n!?.,;:&=<>+-*/@(){}[]^~\\%$".find(input as char).is_some()
 }
 
+// Parser for identities (names).
 named!(ident<ast::Expr>, map!(
     map_res!(
-        take_till!(is_space),
+        take_till!(invalid_indent_char),
         str::from_utf8
     ),
     |s: &str| ast::Expr::Ident(String::from(s))

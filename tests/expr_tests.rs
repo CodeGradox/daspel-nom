@@ -106,6 +106,8 @@ fn test_or_expr() {
 
 #[test]
 fn test_identity() {
+    assert_eq!(run(b"-\xC3\xA5 + a").map(|x| format!("{}", x)),
+        IResult::Done(&b""[..], String::from("-å + a")));
     assert_eq!(run(b"a + -b * 2 / -(-x*-y)").map(|x| format!("{}", x)),
         IResult::Done(&b""[..], String::from("a + -b * 2 / -(-x * -y)")));
 }
